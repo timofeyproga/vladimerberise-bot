@@ -14,7 +14,9 @@ from telegram.ext import (
     CallbackQueryHandler,
     ConversationHandler,
     filters,
-    ContextTypes
+    ContextTypes,
+    ApplicationBuilder
+
 )
 
 # ------------------ Загрузка переменных окружения ------------------
@@ -408,7 +410,13 @@ def main():
     web_thread.start()
 
     # Создаём приложение бота
-    application = Application.builder().token(TOKEN).build()
+    application = (
+    ApplicationBuilder()
+    .token(TOKEN)
+    .connect_timeout(30.0)
+    .read_timeout(30.0)
+    .build()
+)
 
     # ConversationHandler для пользователя
     user_conv = ConversationHandler(
@@ -432,7 +440,10 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_order_action, pattern="^(cancel_order_.*|ready_order_.*|edit_order_.*|back_to_orders)$"))
 
     print("Бот запущен...")
-    application.run_polling()
+    try:
+        application.run_polling()
+    except Exception as e:
+        logger.exception("Бот упал с ошибкой")
 
 if __name__ == "__main__":
     main()
