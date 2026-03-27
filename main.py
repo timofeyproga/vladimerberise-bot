@@ -1,8 +1,11 @@
+import os
 import sqlite3
 import logging
 import random
-import os
+import asyncio
+import threading
 from dotenv import load_dotenv
+from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -14,12 +17,16 @@ from telegram.ext import (
     ContextTypes
 )
 
+# ------------------ Загрузка переменных окружения ------------------
 load_dotenv()
 
-# ------------------ Конфигурация ------------------
-TOKEN = os.getenv("BOT_TOKEN")          # Замените на реальный токен
-ADMIN_ID = int(os.getenv("ADMIN_ID"))              # Замените на ваш Telegram ID
+TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
+if not TOKEN or not ADMIN_ID:
+    raise ValueError("Не заданы BOT_TOKEN или ADMIN_ID в файле .env")
+
+# ------------------ Конфигурация ------------------
 WAITING_FOR_ORDER = 1
 
 logging.basicConfig(
@@ -30,7 +37,9 @@ logger = logging.getLogger(__name__)
 
 DB_NAME = "orders.db"
 
+# ------------------ Работа с базой данных ------------------
 def init_db():
+    """Создаёт таблицу orders, если её нет, и добавляет колонку order_code при необходимости."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='orders'")
@@ -65,6 +74,7 @@ def init_db():
     conn.close()
 
 def generate_unique_code():
+    """Генерирует уникальный 4-значный код заказа."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     while True:
@@ -75,6 +85,7 @@ def generate_unique_code():
             return code
 
 def add_order(user_id, username, order_text):
+    """Добавляет новый заказ и возвращает его код."""
     code = generate_unique_code()
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -87,6 +98,7 @@ def add_order(user_id, username, order_text):
     return code
 
 def get_pending_orders():
+    """Возвращает список всех заказов со статусом 'pending'."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute(
@@ -97,6 +109,7 @@ def get_pending_orders():
     return rows
 
 def get_order_by_id(order_id):
+    """Возвращает данные заказа по id."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT id, order_code, user_id, username, order_text, status FROM orders WHERE id = ?", (order_id,))
@@ -105,6 +118,7 @@ def get_order_by_id(order_id):
     return row
 
 def update_order_status(order_id, new_status):
+    """Меняет статус заказа и возвращает user_id заказа."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM orders WHERE id = ?", (order_id,))
@@ -119,6 +133,7 @@ def update_order_status(order_id, new_status):
     return None
 
 def update_order_text(order_id, new_text):
+    """Обновляет текст заказа и возвращает user_id."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT user_id FROM orders WHERE id = ?", (order_id,))
@@ -183,6 +198,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def display_orders(chat, context, edit=False):
+    """Универсальная функция отображения списка заказов."""
     orders = get_pending_orders()
     if not orders:
         if edit:
@@ -284,7 +300,7 @@ async def handle_order_action(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     data = query.data
-    logger.info(f"Admin action: {data}")  # логируем
+    logger.info(f"Admin action: {data}")
 
     if data.startswith("cancel_order_"):
         order_id = int(data.split("_")[2])
@@ -361,11 +377,40 @@ async def cancel_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Редактирование отменено.")
     await admin_panel(update, context)
 
+# ------------------ Веб-сервер для health check ------------------
+async def health(request):
+    return web.Response(text="OK")
+
+async def start_web():
+    """Запускает aiohttp веб-сервер на порту 8080"""
+    app = web.Application()
+    app.router.add_get('/health', health)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, '0.0.0.0', 8080)
+    await site.start()
+    print("Web server started on port 8080")
+    # Бесконечно держим сервер
+    await asyncio.Event().wait()
+
+def run_web_in_thread():
+    """Запускает веб-сервер в отдельном потоке со своим event loop"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(start_web())
+
 # ------------------ Основная функция ------------------
 def main():
     init_db()
+
+    # Запускаем веб-сервер в фоновом потоке
+    web_thread = threading.Thread(target=run_web_in_thread, daemon=True)
+    web_thread.start()
+
+    # Создаём приложение бота
     application = Application.builder().token(TOKEN).build()
 
+    # ConversationHandler для пользователя
     user_conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
@@ -375,12 +420,13 @@ def main():
     )
     application.add_handler(user_conv)
 
+    # Админские команды
     application.add_handler(CommandHandler("admin", admin_panel))
     application.add_handler(MessageHandler(filters.Regex("^📋 Мои заказы$") & filters.User(ADMIN_ID), show_orders_list))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID), handle_edit_text))
     application.add_handler(CommandHandler("cancel_edit", cancel_edit))
 
-    # Исправленный pattern для обработки кнопок с номерами заказов
+    # Callback-обработчики
     application.add_handler(CallbackQueryHandler(handle_admin_pagination, pattern="^admin_page_"))
     application.add_handler(CallbackQueryHandler(show_order_details, pattern="^show_order_"))
     application.add_handler(CallbackQueryHandler(handle_order_action, pattern="^(cancel_order_.*|ready_order_.*|edit_order_.*|back_to_orders)$"))
