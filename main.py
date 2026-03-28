@@ -4,6 +4,8 @@ import logging
 import random
 import asyncio
 import threading
+import time
+import aiohttp
 from dotenv import load_dotenv
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
@@ -35,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 DB_NAME = "orders.db"
 
-# ------------------ Работа с базой данных (без изменений) ------------------
+# ------------------ Работа с базой данных ------------------
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
@@ -138,7 +140,7 @@ def update_order_text(order_id, new_text):
     conn.close()
     return None
 
-# ------------------ Пользовательские обработчики (без изменений) ------------------
+# ------------------ Пользовательские обработчики ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
     await update.message.reply_text(
@@ -169,7 +171,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Оформление заказа отменено.")
     return ConversationHandler.END
 
-# ------------------ Админские обработчики (без изменений) ------------------
+# ------------------ Админские обработчики ------------------
 admin_keyboard = ReplyKeyboardMarkup([["📋 Мои заказы"]], resize_keyboard=True)
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -338,9 +340,21 @@ async def cancel_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Редактирование отменено.")
     await admin_panel(update, context)
 
-# ------------------ Веб-сервер для health check ------------------
+# ------------------ Веб-сервер для health check с периодическим пингом ------------------
 async def health(request):
     return web.Response(text="OK")
+
+async def periodic_ping():
+    """Каждые 4 минуты запрашивает /health локально, чтобы имитировать активность."""
+    url = "http://localhost:8080/health"
+    while True:
+        await asyncio.sleep(240)  # 4 минуты
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as resp:
+                    logger.debug(f"Ping: {resp.status}")
+        except Exception as e:
+            logger.error(f"Ping failed: {e}")
 
 async def start_web():
     app = web.Application()
@@ -350,6 +364,9 @@ async def start_web():
     site = web.TCPSite(runner, '0.0.0.0', 8080)
     await site.start()
     print("Web server started on port 8080")
+    # Запускаем периодический пинг в фоне
+    asyncio.create_task(periodic_ping())
+    # Бесконечное ожидание
     await asyncio.Event().wait()
 
 def run_web_in_thread():
@@ -392,7 +409,7 @@ def main():
     application.add_handler(CallbackQueryHandler(show_order_details, pattern="^show_order_"))
     application.add_handler(CallbackQueryHandler(handle_order_action, pattern="^(cancel_order_.*|ready_order_.*|edit_order_.*|back_to_orders)$"))
 
-    # Запускаем бота – отключаем обработку сигналов, чтобы избежать ошибки event loop
+    # Запускаем бота – отключаем обработку сигналов
     print("Бот запущен...")
     application.run_polling(stop_signals=[])
 
