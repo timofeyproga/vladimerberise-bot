@@ -9,7 +9,6 @@ from dotenv import load_dotenv
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
-    Application,
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
@@ -394,42 +393,42 @@ def run_web_in_thread():
 def main():
     init_db()
 
-    # Запускаем веб-сервер в фоновом потоке
+    # Запускаем веб-сервер в фоновом потоке (один раз)
     web_thread = threading.Thread(target=run_web_in_thread, daemon=True)
     web_thread.start()
     print("Web server thread started")
 
-    # Создаём приложение бота с увеличенными таймаутами
-    application = (
-        ApplicationBuilder()
-        .token(TOKEN)
-        .connect_timeout(30.0)
-        .read_timeout(30.0)
-        .build()
-    )
-
-    # Добавляем все хендлеры
-    user_conv = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            WAITING_FOR_ORDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, order_received)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
-    application.add_handler(user_conv)
-
-    application.add_handler(CommandHandler("admin", admin_panel))
-    application.add_handler(MessageHandler(filters.Regex("^📋 Мои заказы$") & filters.User(ADMIN_ID), show_orders_list))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID), handle_edit_text))
-    application.add_handler(CommandHandler("cancel_edit", cancel_edit))
-
-    application.add_handler(CallbackQueryHandler(handle_admin_pagination, pattern="^admin_page_"))
-    application.add_handler(CallbackQueryHandler(show_order_details, pattern="^show_order_"))
-    application.add_handler(CallbackQueryHandler(handle_order_action, pattern="^(cancel_order_.*|ready_order_.*|edit_order_.*|back_to_orders)$"))
-
     # Бесконечный цикл перезапуска бота
     while True:
         try:
+            # Создаём НОВЫЙ экземпляр приложения бота с увеличенными таймаутами
+            application = (
+                ApplicationBuilder()
+                .token(TOKEN)
+                .connect_timeout(30.0)
+                .read_timeout(30.0)
+                .build()
+            )
+
+            # Добавляем все хендлеры
+            user_conv = ConversationHandler(
+                entry_points=[CommandHandler("start", start)],
+                states={
+                    WAITING_FOR_ORDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, order_received)],
+                },
+                fallbacks=[CommandHandler("cancel", cancel)],
+            )
+            application.add_handler(user_conv)
+
+            application.add_handler(CommandHandler("admin", admin_panel))
+            application.add_handler(MessageHandler(filters.Regex("^📋 Мои заказы$") & filters.User(ADMIN_ID), show_orders_list))
+            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID), handle_edit_text))
+            application.add_handler(CommandHandler("cancel_edit", cancel_edit))
+
+            application.add_handler(CallbackQueryHandler(handle_admin_pagination, pattern="^admin_page_"))
+            application.add_handler(CallbackQueryHandler(show_order_details, pattern="^show_order_"))
+            application.add_handler(CallbackQueryHandler(handle_order_action, pattern="^(cancel_order_.*|ready_order_.*|edit_order_.*|back_to_orders)$"))
+
             print("Бот запущен...")
             application.run_polling()
         except Exception as e:
