@@ -1,38 +1,40 @@
 import os
 import sqlite3
-import random
 import logging
+import random
 from dotenv import load_dotenv
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse, PlainTextResponse
-import uvicorn
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import (
-    Application,
+    ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
     ConversationHandler,
     filters,
-    ContextTypes,
+    ContextTypes
 )
 
-# ------------------ Загрузка переменных ------------------
+# ------------------ Загрузка переменных окружения ------------------
 load_dotenv()
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 if not TOKEN or not ADMIN_ID:
-    raise ValueError("Не заданы BOT_TOKEN или ADMIN_ID")
+    raise ValueError("Не заданы BOT_TOKEN или ADMIN_ID в файле .env")
 
-# ------------------ База данных ------------------
-DB_NAME = "orders.db"
+# ------------------ Конфигурация ------------------
 WAITING_FOR_ORDER = 1
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 logger = logging.getLogger(__name__)
 
+DB_NAME = "orders.db"
+
+# ------------------ Работа с базой данных ------------------
 def init_db():
+    """Создаёт таблицу orders, если её нет, и добавляет колонку order_code при необходимости."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='orders'")
@@ -134,9 +136,7 @@ def update_order_text(order_id, new_text):
     conn.close()
     return None
 
-# ------------------ Обработчики (те же самые) ------------------
-admin_keyboard = ReplyKeyboardMarkup([["📋 Мои заказы"]], resize_keyboard=True)
-
+# ------------------ Пользовательские обработчики ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
     await update.message.reply_text(
@@ -152,9 +152,13 @@ async def order_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = update.effective_user
     order_text = update.message.text
     username = user.username or f"{user.first_name} {user.last_name or ''}".strip()
+
     order_code = add_order(user.id, username, order_text)
+
     await update.message.reply_text(
-        f"✅ Заказ принят!\nНомер вашего заказа: #{order_code}\nОжидайте, скоро с вами свяжутся."
+        f"✅ Заказ принят!\n"
+        f"Номер вашего заказа: #{order_code}\n"
+        "Ожидайте, скоро с вами свяжутся."
     )
     if ADMIN_ID:
         await context.bot.send_message(
@@ -167,13 +171,23 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Оформление заказа отменено.")
     return ConversationHandler.END
 
+# ------------------ Админские обработчики ------------------
+admin_keyboard = ReplyKeyboardMarkup(
+    [["📋 Мои заказы"]],
+    resize_keyboard=True
+)
+
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("У вас нет доступа.")
         return
-    await update.message.reply_text("Панель администратора:", reply_markup=admin_keyboard)
+    await update.message.reply_text(
+        "Панель администратора:",
+        reply_markup=admin_keyboard
+    )
 
 async def display_orders(chat, context, edit=False):
+    """Универсальная функция отображения списка заказов."""
     orders = get_pending_orders()
     if not orders:
         if edit:
@@ -181,13 +195,17 @@ async def display_orders(chat, context, edit=False):
         else:
             await chat.reply_text("Нет ожидающих заказов.")
         return
+
     page = context.user_data.get("admin_page", 0)
     total_pages = (len(orders) + 4) // 5
-    if page < 0: page = 0
-    if page >= total_pages: page = total_pages - 1
+    if page < 0:
+        page = 0
+    if page >= total_pages:
+        page = total_pages - 1
     start = page * 5
     end = start + 5
     page_orders = orders[start:end]
+
     keyboard = []
     for order in page_orders:
         order_id, code, user_id, username, order_text, created_at = order
@@ -196,6 +214,7 @@ async def display_orders(chat, context, edit=False):
             f"#{code} | {username} | {short_text}",
             callback_data=f"show_order_{order_id}"
         )])
+
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("◀️ Назад", callback_data="admin_page_prev"))
@@ -203,6 +222,7 @@ async def display_orders(chat, context, edit=False):
         nav_buttons.append(InlineKeyboardButton("Вперёд ▶️", callback_data="admin_page_next"))
     if nav_buttons:
         keyboard.append(nav_buttons)
+
     reply_markup = InlineKeyboardMarkup(keyboard)
     if edit:
         await chat.edit_message_text("Выберите заказ:", reply_markup=reply_markup)
@@ -210,7 +230,8 @@ async def display_orders(chat, context, edit=False):
         await chat.reply_text("Выберите заказ:", reply_markup=reply_markup)
 
 async def show_orders_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
+    if update.effective_user.id != ADMIN_ID:
+        return
     await display_orders(update.message, context, edit=False)
 
 async def handle_admin_pagination(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -219,10 +240,13 @@ async def handle_admin_pagination(update: Update, context: ContextTypes.DEFAULT_
     if update.effective_user.id != ADMIN_ID:
         await query.edit_message_text("Нет доступа.")
         return
+
     action = query.data
     page = context.user_data.get("admin_page", 0)
-    if action == "admin_page_prev": page -= 1
-    elif action == "admin_page_next": page += 1
+    if action == "admin_page_prev":
+        page -= 1
+    elif action == "admin_page_next":
+        page += 1
     context.user_data["admin_page"] = page
     await display_orders(query, context, edit=True)
 
@@ -232,14 +256,19 @@ async def show_order_details(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if update.effective_user.id != ADMIN_ID:
         await query.edit_message_text("Нет доступа.")
         return
+
     order_id = int(query.data.split("_")[2])
     order = get_order_by_id(order_id)
     if not order:
         await query.edit_message_text("Заказ не найден.")
         return
+
     order_id, code, user_id, username, order_text, status = order
     text = (
-        f"📦 Заказ #{code}\n👤 Пользователь: {username}\n📝 Описание:\n{order_text}\n🏷️ Статус: {status}"
+        f"📦 Заказ #{code}\n"
+        f"👤 Пользователь: {username}\n"
+        f"📝 Описание:\n{order_text}\n"
+        f"🏷️ Статус: {status}"
     )
     keyboard = [
         [
@@ -258,126 +287,115 @@ async def handle_order_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     if update.effective_user.id != ADMIN_ID:
         await query.edit_message_text("Нет доступа.")
         return
+
     data = query.data
+    logger.info(f"Admin action: {data}")
+
     if data.startswith("cancel_order_"):
         order_id = int(data.split("_")[2])
         user_id = update_order_status(order_id, "cancelled")
         if user_id:
             try:
-                await context.bot.send_message(chat_id=user_id, text=f"❌ Ваш заказ #{order_id} был отменён администратором.")
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"❌ Ваш заказ #{order_id} был отменён администратором."
+                )
             except Exception as e:
                 logger.error(f"Не удалось уведомить пользователя {user_id}: {e}")
             await display_orders(query, context, edit=True)
         else:
             await query.edit_message_text("❌ Ошибка: заказ не найден.")
+
     elif data.startswith("ready_order_"):
         order_id = int(data.split("_")[2])
         user_id = update_order_status(order_id, "ready")
         if user_id:
             try:
-                await context.bot.send_message(chat_id=user_id, text=f"🎉 Ваш заказ #{order_id} готов! Можете забирать.")
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"🎉 Ваш заказ #{order_id} готов! Можете забирать."
+                )
             except Exception as e:
                 logger.error(f"Не удалось уведомить пользователя {user_id}: {e}")
             await display_orders(query, context, edit=True)
         else:
             await query.edit_message_text("❌ Ошибка: заказ не найден.")
+
     elif data.startswith("edit_order_"):
         order_id = int(data.split("_")[2])
         context.user_data["editing_order_id"] = order_id
-        await query.edit_message_text("✏️ Введите новый текст заказа (одним сообщением).\nИли нажмите /cancel_edit для отмены.")
+        await query.edit_message_text(
+            "✏️ Введите новый текст заказа (одним сообщением).\n"
+            "Или нажмите /cancel_edit для отмены."
+        )
+
     elif data == "back_to_orders":
         await display_orders(query, context, edit=True)
     else:
         await query.edit_message_text("Неизвестная команда.")
 
 async def handle_edit_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
+    if update.effective_user.id != ADMIN_ID:
+        return
     editing_order_id = context.user_data.get("editing_order_id")
-    if not editing_order_id: return
+    if not editing_order_id:
+        return
+
     new_text = update.message.text
     user_id = update_order_text(editing_order_id, new_text)
     if user_id:
         try:
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"✏️ Ваш заказ #{editing_order_id} был изменён администратором.\nНовая версия:\n{new_text}"
+                text=f"✏️ Ваш заказ #{editing_order_id} был изменён администратором.\n"
+                     f"Новая версия:\n{new_text}"
             )
         except Exception as e:
             logger.error(f"Не удалось уведомить пользователя {user_id}: {e}")
         await update.message.reply_text("✅ Заказ изменён. Пользователь уведомлён.")
     else:
         await update.message.reply_text("❌ Ошибка: заказ не найден.")
+
     context.user_data.pop("editing_order_id", None)
     await admin_panel(update, context)
 
 async def cancel_edit(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID: return
+    if update.effective_user.id != ADMIN_ID:
+        return
     context.user_data.pop("editing_order_id", None)
     await update.message.reply_text("Редактирование отменено.")
     await admin_panel(update, context)
 
-# ------------------ Создание приложения и настройка webhook ------------------
-def setup_application():
-    """Создаёт экземпляр Application и добавляет все хендлеры."""
-    application = Application.builder().token(TOKEN).build()
+# ------------------ Основная функция ------------------
+def main():
+    init_db()
 
+    # Создаём приложение бота
+    application = ApplicationBuilder().token(TOKEN).build()
+
+    # ConversationHandler для пользователя
     user_conv = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
-        states={WAITING_FOR_ORDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, order_received)]},
+        states={
+            WAITING_FOR_ORDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, order_received)],
+        },
         fallbacks=[CommandHandler("cancel", cancel)],
     )
     application.add_handler(user_conv)
+
+    # Админские команды
     application.add_handler(CommandHandler("admin", admin_panel))
     application.add_handler(MessageHandler(filters.Regex("^📋 Мои заказы$") & filters.User(ADMIN_ID), show_orders_list))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID), handle_edit_text))
     application.add_handler(CommandHandler("cancel_edit", cancel_edit))
+
+    # Callback-обработчики
     application.add_handler(CallbackQueryHandler(handle_admin_pagination, pattern="^admin_page_"))
     application.add_handler(CallbackQueryHandler(show_order_details, pattern="^show_order_"))
     application.add_handler(CallbackQueryHandler(handle_order_action, pattern="^(cancel_order_.*|ready_order_.*|edit_order_.*|back_to_orders)$"))
 
-    return application
-
-# ------------------ Starlette веб-сервер для webhook ------------------
-app = Starlette()
-
-@app.route("/webhook", methods=["POST"])
-async def telegram_webhook(request: Request):
-    """Принимает обновления от Telegram."""
-    data = await request.json()
-    # При каждом запросе создаём новый экземпляр Application (легковесный)
-    application = setup_application()
-    await application.initialize()
-    # Обрабатываем обновление
-    update = Update.de_json(data, application.bot)
-    await application.process_update(update)
-    await application.shutdown()
-    return JSONResponse({"ok": True})
-
-@app.route("/health", methods=["GET"])
-async def health(request: Request):
-    """Эндпоинт для проверки работоспособности (нужен Render)."""
-    return PlainTextResponse("OK")
-
-@app.on_event("startup")
-async def startup():
-    """При старте сервера устанавливаем webhook."""
-    init_db()
-    application = setup_application()
-    await application.initialize()
-    # Определяем URL для webhook (используем переменную окружения или выводим в лог)
-    # Render предоставляет домен через переменную RENDER_EXTERNAL_URL
-    webhook_url = os.getenv("RENDER_EXTERNAL_URL", "https://your-app.onrender.com") + "/webhook"
-    await application.bot.set_webhook(webhook_url)
-    logger.info(f"Webhook установлен на {webhook_url}")
-    await application.shutdown()
-
-@app.on_event("shutdown")
-async def shutdown():
-    """При остановке сервера удаляем webhook (опционально)."""
-    application = setup_application()
-    await application.initialize()
-    await application.bot.delete_webhook()
-    await application.shutdown()
+    print("Бот запущен...")
+    application.run_polling()
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    main()
