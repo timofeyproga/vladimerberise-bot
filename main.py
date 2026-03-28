@@ -4,7 +4,6 @@ import logging
 import random
 import asyncio
 import threading
-import time
 from dotenv import load_dotenv
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
@@ -36,9 +35,8 @@ logger = logging.getLogger(__name__)
 
 DB_NAME = "orders.db"
 
-# ------------------ Работа с базой данных ------------------
+# ------------------ Работа с базой данных (без изменений) ------------------
 def init_db():
-    """Создаёт таблицу orders, если её нет, и добавляет колонку order_code при необходимости."""
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='orders'")
@@ -140,7 +138,7 @@ def update_order_text(order_id, new_text):
     conn.close()
     return None
 
-# ------------------ Пользовательские обработчики ------------------
+# ------------------ Пользовательские обработчики (без изменений) ------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user = update.effective_user
     await update.message.reply_text(
@@ -156,13 +154,9 @@ async def order_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = update.effective_user
     order_text = update.message.text
     username = user.username or f"{user.first_name} {user.last_name or ''}".strip()
-
     order_code = add_order(user.id, username, order_text)
-
     await update.message.reply_text(
-        f"✅ Заказ принят!\n"
-        f"Номер вашего заказа: #{order_code}\n"
-        "Ожидайте, скоро с вами свяжутся."
+        f"✅ Заказ принят!\nНомер вашего заказа: #{order_code}\nОжидайте, скоро с вами свяжутся."
     )
     if ADMIN_ID:
         await context.bot.send_message(
@@ -175,23 +169,16 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     await update.message.reply_text("Оформление заказа отменено.")
     return ConversationHandler.END
 
-# ------------------ Админские обработчики ------------------
-admin_keyboard = ReplyKeyboardMarkup(
-    [["📋 Мои заказы"]],
-    resize_keyboard=True
-)
+# ------------------ Админские обработчики (без изменений) ------------------
+admin_keyboard = ReplyKeyboardMarkup([["📋 Мои заказы"]], resize_keyboard=True)
 
 async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("У вас нет доступа.")
         return
-    await update.message.reply_text(
-        "Панель администратора:",
-        reply_markup=admin_keyboard
-    )
+    await update.message.reply_text("Панель администратора:", reply_markup=admin_keyboard)
 
 async def display_orders(chat, context, edit=False):
-    """Универсальная функция отображения списка заказов."""
     orders = get_pending_orders()
     if not orders:
         if edit:
@@ -244,7 +231,6 @@ async def handle_admin_pagination(update: Update, context: ContextTypes.DEFAULT_
     if update.effective_user.id != ADMIN_ID:
         await query.edit_message_text("Нет доступа.")
         return
-
     action = query.data
     page = context.user_data.get("admin_page", 0)
     if action == "admin_page_prev":
@@ -260,13 +246,11 @@ async def show_order_details(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if update.effective_user.id != ADMIN_ID:
         await query.edit_message_text("Нет доступа.")
         return
-
     order_id = int(query.data.split("_")[2])
     order = get_order_by_id(order_id)
     if not order:
         await query.edit_message_text("Заказ не найден.")
         return
-
     order_id, code, user_id, username, order_text, status = order
     text = (
         f"📦 Заказ #{code}\n"
@@ -291,7 +275,6 @@ async def handle_order_action(update: Update, context: ContextTypes.DEFAULT_TYPE
     if update.effective_user.id != ADMIN_ID:
         await query.edit_message_text("Нет доступа.")
         return
-
     data = query.data
     logger.info(f"Admin action: {data}")
 
@@ -300,39 +283,27 @@ async def handle_order_action(update: Update, context: ContextTypes.DEFAULT_TYPE
         user_id = update_order_status(order_id, "cancelled")
         if user_id:
             try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"❌ Ваш заказ #{order_id} был отменён администратором."
-                )
+                await context.bot.send_message(chat_id=user_id, text=f"❌ Ваш заказ #{order_id} был отменён администратором.")
             except Exception as e:
                 logger.error(f"Не удалось уведомить пользователя {user_id}: {e}")
             await display_orders(query, context, edit=True)
         else:
             await query.edit_message_text("❌ Ошибка: заказ не найден.")
-
     elif data.startswith("ready_order_"):
         order_id = int(data.split("_")[2])
         user_id = update_order_status(order_id, "ready")
         if user_id:
             try:
-                await context.bot.send_message(
-                    chat_id=user_id,
-                    text=f"🎉 Ваш заказ #{order_id} готов! Можете забирать."
-                )
+                await context.bot.send_message(chat_id=user_id, text=f"🎉 Ваш заказ #{order_id} готов! Можете забирать.")
             except Exception as e:
                 logger.error(f"Не удалось уведомить пользователя {user_id}: {e}")
             await display_orders(query, context, edit=True)
         else:
             await query.edit_message_text("❌ Ошибка: заказ не найден.")
-
     elif data.startswith("edit_order_"):
         order_id = int(data.split("_")[2])
         context.user_data["editing_order_id"] = order_id
-        await query.edit_message_text(
-            "✏️ Введите новый текст заказа (одним сообщением).\n"
-            "Или нажмите /cancel_edit для отмены."
-        )
-
+        await query.edit_message_text("✏️ Введите новый текст заказа (одним сообщением).\nИли нажмите /cancel_edit для отмены.")
     elif data == "back_to_orders":
         await display_orders(query, context, edit=True)
     else:
@@ -344,22 +315,19 @@ async def handle_edit_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     editing_order_id = context.user_data.get("editing_order_id")
     if not editing_order_id:
         return
-
     new_text = update.message.text
     user_id = update_order_text(editing_order_id, new_text)
     if user_id:
         try:
             await context.bot.send_message(
                 chat_id=user_id,
-                text=f"✏️ Ваш заказ #{editing_order_id} был изменён администратором.\n"
-                     f"Новая версия:\n{new_text}"
+                text=f"✏️ Ваш заказ #{editing_order_id} был изменён администратором.\nНовая версия:\n{new_text}"
             )
         except Exception as e:
             logger.error(f"Не удалось уведомить пользователя {user_id}: {e}")
         await update.message.reply_text("✅ Заказ изменён. Пользователь уведомлён.")
     else:
         await update.message.reply_text("❌ Ошибка: заказ не найден.")
-
     context.user_data.pop("editing_order_id", None)
     await admin_panel(update, context)
 
@@ -389,56 +357,44 @@ def run_web_in_thread():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(start_web())
 
-# ------------------ Основная функция с циклом перезапуска ------------------
+# ------------------ Основная функция ------------------
 def main():
     init_db()
 
-    # Запускаем веб-сервер в фоновом потоке (один раз)
+    # Запускаем веб-сервер в фоновом потоке
     web_thread = threading.Thread(target=run_web_in_thread, daemon=True)
     web_thread.start()
     print("Web server thread started")
 
-    # Бесконечный цикл перезапуска бота
-    while True:
-        try:
-            # Создаём НОВЫЙ экземпляр приложения бота с увеличенными таймаутами
-            application = (
-                ApplicationBuilder()
-                .token(TOKEN)
-                .connect_timeout(30.0)
-                .read_timeout(30.0)
-                .build()
-            )
+    # Создаём приложение бота
+    application = (
+        ApplicationBuilder()
+        .token(TOKEN)
+        .connect_timeout(30.0)
+        .read_timeout(30.0)
+        .build()
+    )
 
-            # Добавляем все хендлеры
-            user_conv = ConversationHandler(
-                entry_points=[CommandHandler("start", start)],
-                states={
-                    WAITING_FOR_ORDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, order_received)],
-                },
-                fallbacks=[CommandHandler("cancel", cancel)],
-            )
-            application.add_handler(user_conv)
+    # Добавляем хендлеры
+    user_conv = ConversationHandler(
+        entry_points=[CommandHandler("start", start)],
+        states={
+            WAITING_FOR_ORDER: [MessageHandler(filters.TEXT & ~filters.COMMAND, order_received)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+    application.add_handler(user_conv)
+    application.add_handler(CommandHandler("admin", admin_panel))
+    application.add_handler(MessageHandler(filters.Regex("^📋 Мои заказы$") & filters.User(ADMIN_ID), show_orders_list))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID), handle_edit_text))
+    application.add_handler(CommandHandler("cancel_edit", cancel_edit))
+    application.add_handler(CallbackQueryHandler(handle_admin_pagination, pattern="^admin_page_"))
+    application.add_handler(CallbackQueryHandler(show_order_details, pattern="^show_order_"))
+    application.add_handler(CallbackQueryHandler(handle_order_action, pattern="^(cancel_order_.*|ready_order_.*|edit_order_.*|back_to_orders)$"))
 
-            application.add_handler(CommandHandler("admin", admin_panel))
-            application.add_handler(MessageHandler(filters.Regex("^📋 Мои заказы$") & filters.User(ADMIN_ID), show_orders_list))
-            application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & filters.User(ADMIN_ID), handle_edit_text))
-            application.add_handler(CommandHandler("cancel_edit", cancel_edit))
-
-            application.add_handler(CallbackQueryHandler(handle_admin_pagination, pattern="^admin_page_"))
-            application.add_handler(CallbackQueryHandler(show_order_details, pattern="^show_order_"))
-            application.add_handler(CallbackQueryHandler(handle_order_action, pattern="^(cancel_order_.*|ready_order_.*|edit_order_.*|back_to_orders)$"))
-
-            print("Бот запущен...")
-            application.run_polling()
-        except Exception as e:
-            logger.exception(f"Бот упал с ошибкой: {e}")
-            print(f"Бот упал, перезапуск через 10 секунд...")
-            time.sleep(10)
-        else:
-            # Если run_polling завершился без ошибки (например, остановлен), тоже перезапускаем
-            print("Бот остановился, перезапуск через 10 секунд...")
-            time.sleep(10)
+    # Запускаем бота – отключаем обработку сигналов, чтобы избежать ошибки event loop
+    print("Бот запущен...")
+    application.run_polling(stop_signals=[])
 
 if __name__ == "__main__":
     main()
